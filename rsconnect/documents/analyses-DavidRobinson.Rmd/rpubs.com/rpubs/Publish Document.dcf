@@ -1,0 +1,10 @@
+name: Publish Document
+title:
+username:
+account: rpubs
+server: rpubs.com
+hostUrl: rpubs.com
+appId: https://api.rpubs.com/api/v1/document/640786/b0101151fd4243368c36dfbf25d6b2a6
+bundleId: https://api.rpubs.com/api/v1/document/640786/b0101151fd4243368c36dfbf25d6b2a6
+url: http://rpubs.com/JoanClaverol/640786
+when: 1595174236.08787

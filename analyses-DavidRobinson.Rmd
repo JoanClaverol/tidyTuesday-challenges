@@ -1,0 +1,393 @@
+---
+title: "TidyTuesday anlyses from David Robinson"
+output: 
+  html_document: 
+    toc: true
+    toc_float: true
+    code_folding: hide
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE,
+                      cache = TRUE)
+```
+
+## Coffee ratings 
+
+```{r}
+# libraries
+library(tidytuesdayR)
+library(tidyverse)
+
+# set plot theme
+theme_set(theme_light())
+
+# load data
+coffee <- tt_load("2020-07-07")
+coffee_ratings <- coffee$coffee_ratings %>%
+  mutate(coffee_id = row_number()) %>%
+  filter(total_cup_points > 0)
+```
+
+```{r}
+coffee_ratings %>%
+  count(species, sort = TRUE) # sort
+
+# focus on variety, filter out any of it is missing
+coffee_lumped <- coffee_ratings %>%
+  filter(!is.na(variety)) %>%
+  mutate(variety = fct_lump(variety, 12), # select the top 12 factors
+         sort = TRUE)
+
+
+coffee_lumped %>%
+  mutate(
+    variety = fct_reorder(
+      variety, total_cup_points
+      ) # reorder factors in relation to the total cup points
+    ) %>% 
+  ggplot(aes(total_cup_points, variety)) +
+    geom_boxplot()
+
+
+coffee_lumped %>%
+  ggplot(aes(total_cup_points, fill = variety)) +
+    geom_histogram(binwidth = 1) +
+    facet_wrap(~ variety, scale = "free_y") + # adapt y axis to each variety
+    theme(legend.position = "none")
+```
+
+```{r}
+
+coffee_ratings %>%
+  summarize(
+    across(
+      everything(), ~ mean(!is.na(.))
+      )
+    ) %>% 
+  gather()
+
+coffee_ratings %>%
+  count(producer, sort = TRUE)
+coffee_ratings %>%
+  count(company, sort = TRUE)
+coffee_ratings %>%
+  count(color, sort = TRUE)
+
+
+coffee_ratings %>%
+  count(country = fct_lump(country_of_origin, 12), sort = TRUE) %>%
+  filter(!is.na(country)) %>%
+  mutate(country = fct_reorder(country, n)) %>%
+  ggplot(aes(n, country)) +
+  geom_col()
+
+
+coffee_ratings %>%
+  filter(!is.na(country_of_origin)) %>%
+  mutate(country = fct_lump(country_of_origin, 12),
+         country = fct_reorder(country, total_cup_points)) %>%
+  ggplot(aes(total_cup_points, country)) +
+  geom_boxplot()
+```
+
+Interesting dimensions:
+
+* Country
+* Variety
+* Company??
+
+```{r}
+library(ggridges)
+coffee_metrics <- coffee_ratings %>%
+  select(coffee_id, total_cup_points, variety, company,
+         country_of_origin,
+         altitude_mean_meters,
+         aroma:moisture) %>%
+  pivot_longer(aroma:cupper_points, names_to = "metric", values_to = "value")
+coffee_metrics %>%
+  mutate(metric = fct_reorder(metric, value)) %>%
+  ggplot(aes(value, metric)) +
+  geom_density_ridges() # geom_density for categorical variables in a dataset
+coffee_metrics %>%
+  group_by(metric) %>%
+  summarize(average = mean(value),
+            sd = sd(value)) %>%
+  arrange(desc(average))
+```
+
+```{r}
+library(widyr) # finds correlation into a messy dataset
+library(ggraph) # show network plot to find out clusters
+library(igraph)
+library(tidytext)
+correlations <- coffee_metrics %>% 
+  # do not understand that step
+  pairwise_cor(item = metric, feature = coffee_id, value = value, sort = TRUE)
+
+
+correlations %>%
+  head(50) %>%
+  # show clusters between correlated variables
+  graph_from_data_frame() %>% 
+  ggraph() +
+    geom_edge_link(aes(edge_alpha = correlation)) +
+    geom_node_point() +
+    geom_node_text(aes(label = name), repel = TRUE)
+```
+
+
+```{r}
+# time to apply a pca
+coffee_metrics %>%
+  filter(!metric %in% c("sweetness", "clean_cup", "uniformity")) %>%
+  group_by(metric) %>%
+  mutate(centered = value - mean(value)) %>% # center the values
+  ungroup() %>%
+  widely_svd(item = metric, feature = coffee_id, value = value) %>%
+  filter(between(dimension, 2, 5)) %>%
+  mutate(metric = reorder_within(metric, value, dimension)) %>%
+  ggplot(aes(value, metric)) +
+    geom_col() +
+    scale_y_reordered() +
+    facet_wrap(~ dimension, scales = "free_y")
+```
+
+```{r}
+coffee_ratings %>%
+  filter(altitude_mean_meters < 10000,
+         altitude != 1) %>%
+  mutate(altitude_mean_meters = pmin(altitude_mean_meters, 3000)) %>%
+  ggplot(aes(altitude_mean_meters, total_cup_points)) +
+    geom_point() +
+    geom_smooth(method = "lm")
+```
+
+
+```{r}
+coffee_metrics %>%
+  filter(altitude_mean_meters < 10000) %>%
+  mutate(altitude_mean_meters = pmin(altitude_mean_meters, 3000)) %>%
+  mutate(km = altitude_mean_meters / 1000) %>%
+  group_by(metric) %>%
+  summarize(correlation = cor(altitude_mean_meters, value),
+            model = list(lm(value ~ km))) %>%
+  mutate(tidied = map(model, broom::tidy, conf.int = TRUE)) %>%
+  unnest(tidied) %>%
+  filter(term == "km") %>%
+  ungroup() %>%
+  mutate(metric = fct_reorder(metric, estimate)) %>%
+  ggplot(aes(estimate, metric, color = p.value < .05)) +
+  geom_point() +
+  geom_errorbarh(aes(xmin = conf.low, xmax = conf.high), height = .1) +
+  labs(y = "Evaluation of coffee",
+       x = "Each kilometer of altitude contributes this much to score (95% confidence interval)")
+```
+
+## Tour de France
+
+```{r}
+# libraries
+library(tidytuesdayR)
+library(tidyverse)
+library(lubridate)
+# set plot theme
+theme_set(theme_light())
+```
+
+
+```{r}
+tuesdata <- tidytuesdayR::tt_load('2020-04-07')
+# look at the columns on the dataset
+# let's analyse the birth winners
+tdf_winners <- tuesdata$tdf_winners %>% 
+  mutate(year = year(start_date), 
+         speed = distance / time_overall)
+
+stage_data <- tuesdata$stage_data
+tdf_stages <- tuesdata$tdf_stages %>% 
+  janitor::clean_names() %>% # put all the titles lower
+  mutate(year = year(date))
+
+# exploring winners data
+tdf_winners %>% 
+  count(birth_country, sort = TRUE) %>% 
+  mutate(birth_country = fct_reorder(birth_country, n)) %>% 
+  ggplot(aes(y = birth_country, x = n)) + 
+    geom_col() + 
+    labs(y = "", 
+         title = "What the counties are the most Tour the France winners born in?")
+
+tdf_winners %>% 
+  count(winner_name, birth_country, sort = TRUE)
+```
+
+What has change over time? This question leads to how is the age disitributed over time? 
+
+```{r}
+tdf_winners %>% 
+  group_by(decade = 10 * (year %/% 10)) %>% # truncated division to get the decade
+  summarise(winner_age = mean(age), 
+            winner_height = mean(height, na.rm = TRUE), 
+            winner_weight = mean(weight, na.rm = TRUE)) %>% 
+  ggplot(aes(x = decade, y = winner_age)) + 
+    geom_line() + 
+    expand_limits(y = 0)
+```
+
+There is no clear relation with age, weight or height over the year in the winners. 
+
+Now he is looking at the time margin: 
+
+```{r}
+library(lubridate)
+by_decade <- tdf_winners %>% 
+  group_by(decade = 10 * (year %/% 10)) %>% # truncated division to get the decade
+  summarise(winner_age = mean(age), 
+            winner_height = mean(height, na.rm = TRUE), 
+            winner_weight = mean(weight, na.rm = TRUE), 
+            winner_margin = mean(time_margin, na.rm = TRUE), 
+            winner_speed = mean(speed, na.rm = TRUE))
+
+by_decade %>% 
+  filter(decade >= 1910) %>% # there is only two data points in 1910 
+  ggplot(aes(x = decade, y = winner_margin * 60)) + # transform to minutes
+    geom_line() + 
+    expand_limits(y = 0) + 
+    labs(x = "Decade", 
+         y = "Average margin of winner (minutes)", 
+         title = "Tour the France has been getting closer")
+```
+
+This chart is meaningful. 
+
+NOw let's look at the time of the winner: 
+
+```{r}
+by_decade %>%
+  ggplot(aes(x = decade, y = winner_speed)) +
+    geom_line() + 
+    expand_limits(y = 0) + 
+    labs(x = "Decade", 
+         y = "Average speed of the winner (km/h)", 
+         title = "Tour the France winners have been getting faster")
+```
+
+They have started to flatter on the paste year, possible doping?. 
+TO know more abou it, I would be looking for some variable that affects the speed, like elevation. But they are on present on the dataset. 
+So now we know with the winners dataset they are getting faster and there are getting closer (less margin time). 
+
+Other things, average life expectancy of the winners. To do that, we will do a survivial analyses: 
+
+```{r}
+library(survival) # very good for medical proposals
+library(broom)
+
+surv_model <- tdf_winners %>% 
+  distinct(winner_name, .keep_all = TRUE) %>% 
+  transmute(winner_name,
+            birth_year = year(born), 
+            death_year = year(died), 
+            dead = as.integer(!is.na(death_year))) %>% 
+  mutate(age_at_death = coalesce(death_year, 2020) - birth_year) %>% # They are not death, we are just saying they are alive in 2020
+  survival::survfit(Surv(age_at_death, dead) ~ 1, data = .) 
+
+glance(surv_model)
+```
+
+Median life expectancy of a Tour of France winner is 77. 
+
+Now let's start some exploration on the stage data: 
+
+```{r}
+# I want to join stage data, but I need to prepare them before doing it 
+stages_joined <- stage_data %>% 
+  extract(col = stage_results_id,
+          into = "stage",
+          regex = "stage-(.*)") %>%  # extract anything after "stage"
+  inner_join(tdf_stages, by = c("year", "stage")) %>%  # I've lost a little bit of data
+  mutate(rank = as.integer(rank)) %>% # NA introduced cause of people not finishing the race
+ # add_count(year, stage, name = "competitors") # adding competitors by year and stage
+  # now I want to get the number of finishers 
+  group_by(year, stage) %>% 
+  mutate(finishers = sum(!is.na(rank))) %>% 
+  ungroup() %>% 
+  mutate(percentile = 1 - rank / finishers)
+
+stages_joined %>% 
+  filter(stage == "1") %>% 
+  group_by(winner_country) %>% 
+  summarise(stages = n(), 
+            median_percentile = median(percentile, na.rm = TRUE)) %>% 
+  arrange(desc(stages))
+```
+
+This table tell us that no country does it better than the average at the first stage. 
+
+How can I find the relation between the results at the first stage and how is affecting at the final results?
+Does the winner of the first stage predict their final point ranking?
+
+```{r}
+total_points <- stages_joined %>% 
+  group_by(year, rider) %>% 
+  summarise(total_points = sum(points, na.rm = TRUE)) %>% 
+  mutate(points_rank = percent_rank(total_points)) %>% 
+  ungroup()
+
+stages_joined %>% 
+  filter(stage == "1") %>% 
+  inner_join(total_points, by = c("year", "rider")) %>% 
+  select(year, rider, percentile_first_stage = percentile, 
+         points_rank) %>% 
+  mutate(first_stage_bin = cut(percentile_first_stage, seq(0, 1, .1))) %>% 
+  filter(!is.na(first_stage_bin)) %>% 
+  ggplot(aes(y = first_stage_bin, x = points_rank)) + 
+    geom_boxplot() + 
+    labs(y = "Decile performance in the first stage", 
+         x = "Overall points percentile")
+
+```
+
+So yes, there is a relation between your results at the first stage and the final results. 
+
+Now we are going to use a gganimate to show a race: 
+
+```{r}
+library(gganimate)
+
+top_10_2017 <- total_points %>% 
+  filter(year == max(year)) %>% 
+  top_n(10, total_points)
+
+stages_joined %>% 
+  filter(year == max(year)) %>% 
+  semi_join(top_10_2017, by = "rider") %>% # now I have all the data for the top 10 riders accross all the time
+  mutate(stage = as.integer(stage), 
+         points = coalesce(points, 0)) %>% 
+  group_by(rider) %>% 
+  mutate(cumulative_points = cumsum(points)) %>% 
+  ungroup() %>% 
+  ggplot(aes(cumulative_points, rider, fill = cumulative_points)) + 
+    geom_col() + 
+    transition_time(stage) + 
+    theme(legend.position = "none") + 
+    labs(title = "The 2018 Tour France: Stage: {frame_time}", 
+         x = "Cumulative points at this stage", 
+         y = "") 
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

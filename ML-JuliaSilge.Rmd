@@ -1,0 +1,142 @@
+---
+title: "TidyTuesday ML from Julia Silge"
+output: 
+  html_document: 
+    toc: true
+    toc_float: true
+    code_folding: hide
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE,
+                      cache = TRUE)
+```
+
+## The Office 
+
+We are going to predict the Imdb rating for the Office episodes. To do so, we will use a lasso regression,
+
+### Lasso regression 
+
+It is a regularisation technique. *Regularizations are techniques used to reduce the error by fitting a function appropriately on the given training set and avoid overfitting.* [...] *In machine learning, you will have a fair idea that regularization penalizes the coefficients. In deep learning, it actually penalizes the weight matrices of the nodes.* 
+
+Why do we use it? 
+
+* Lasso regression helps reduce overfitting and it is particularly useful for feature selection. 
+* Lasso regression can be useful if we have several independent variables that are useless. 
+* Ridge regression can reduce the slope close to zero (but not exactly zero) but Lasso regression can reduce the slope to be exactly equal to zero. 
+
+### Tidytuesday challenge
+
+```{r}
+library(tidyverse)
+library(tidytuesdayR)
+
+theme_set(theme_light())
+
+office_data <- tt_load("2020-03-17")
+ratings_raw <- office_data$office_ratings 
+
+# prepare preprocess to join office data from tidytuesday challenge, to the 
+# office data from the library schrute
+remove_regex <- "[:punct:]|[:digit:]|parts |part |the |and" # some episodes are
+# part 1 and others are 1 and then there is another on which is 2
+office_ratings <- ratings_raw %>%
+  transmute(
+    episode_name = str_to_lower(title),
+    episode_name = str_remove_all(episode_name, remove_regex),
+    episode_name = str_trim(episode_name),
+    imdb_rating
+  )
+
+office_info <- schrute::theoffice %>%
+  mutate(
+    season = as.numeric(season),
+    episode = as.numeric(episode),
+    episode_name = str_to_lower(episode_name),
+    episode_name = str_remove_all(episode_name, remove_regex),
+    episode_name = str_trim(episode_name)
+  ) %>%
+  select(season, episode, episode_name, director, writer, character)
+
+```
+
+Now we are going to build the dataset to start modeling: 
+
+```{r}
+# let's see how many line do we have for each character for each episode
+characters <- office_info %>%
+  count(episode_name, character) %>%
+  add_count(character, wt = n, name = "character_count") %>%
+  filter(character_count > 800) %>%
+  select(-character_count) %>%
+  pivot_wider(
+    names_from = character,
+    values_from = n,
+    values_fill = list(n = 0)
+  )
+```
+
+Let's focus on the writer and the director: 
+
+```{r}
+creators <- office_info %>%
+  distinct(episode_name, director, writer) %>%
+  pivot_longer(director:writer, names_to = "role", values_to = "person") %>%
+  separate_rows(person, sep = ";") %>%
+  add_count(person) %>%
+  filter(n > 10) %>%
+  distinct(episode_name, person) %>%
+  mutate(person_value = 1) %>%
+  pivot_wider(
+    names_from = person,
+    values_from = person_value,
+    values_fill = list(person_value = 0)
+  )
+```
+
+Now we are going to join the information: 
+
+```{r}
+office <- office_info %>%
+  distinct(season, episode, episode_name) %>%
+  inner_join(characters) %>%
+  inner_join(creators) %>%
+  inner_join(office_ratings %>%
+    select(episode_name, imdb_rating)) %>%
+  janitor::clean_names()
+```
+
+Show some visualizations for the ratings of the different seasons: 
+
+```{r}
+office %>% 
+  ggplot(aes(season, imdb_rating, fill = as.factor(season))) + 
+    geom_boxplot(show.legend = FALSE)
+```
+
+And let's see of there is a high ratings at the end of the seasons: 
+
+```{r}
+office %>% 
+  ggplot(aes(episode, imdb_rating, fill = as.factor(episode))) + 
+    geom_boxplot(show.legend = FALSE)
+```
+
+
+#### Train a model 
+
+What we want to understand if the appearance of an specific actor it is making the episode more highly to have a high rating. 
+
+```{r}
+library(tidymodels)
+
+# let's do our data split 
+initial_split(office, strata = season) # we want to have the same proportion of episodes from different seasons in the test that in the train 
+```
+
+
+Tune LASSO parameters
+
+
+
