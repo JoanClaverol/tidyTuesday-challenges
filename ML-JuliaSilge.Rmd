@@ -132,11 +132,122 @@ What we want to understand if the appearance of an specific actor it is making t
 library(tidymodels)
 
 # let's do our data split 
-initial_split(office, strata = season) # we want to have the same proportion of episodes from different seasons in the test that in the train 
+office_split <- initial_split(office, strata = season) # we want to have the same proportion of episodes from different seasons in the test that in the train 
+office_train <- training(office_split)
+office_test <- testing(office_split)
+# small test
+
+# now it is time to write the recipe
+office_rec <- recipe(imdb_rating ~ ., data = office_train) %>%
+  # we want to keep the episode name, as we are going to use it as id, but
+  # we don't want to use it to predict
+  update_role(episode_name, new_role = "ID") %>%
+  # Will remove variables that contains only a single value, so removing 
+  # 0 variance
+  step_zv(all_numeric(), -all_outcomes()) %>%
+  # now we are going to normalise by center and scaling, which is required in
+  # lasso regression
+  step_normalize(all_numeric(), -all_outcomes())
+
+# prepare the recipe
+office_prep <- office_rec %>%
+  prep(strings_as_factors = FALSE)
 ```
 
+Time to build our model: 
 
-Tune LASSO parameters
+```{r}
+lasso_spec <- linear_reg(penalty = 0.1, mixture = 1) %>%
+  set_engine("glmnet")
 
+# A workflow will help me to put all the pieces together 
+wf <- workflow() %>%
+  add_recipe(office_rec)
 
+lasso_fit <- wf %>%
+  add_model(lasso_spec) %>%
+  fit(data = office_train)
+  
+lasso_fit %>%
+  # get the actual results
+  pull_workflow_fit() %>%
+  tidy() %>% 
+  arrange(dev.ratio)
+```
+
+#### Tune LASSO parameters
+
+How do we figure out to pick the penalty value. To do that we use resample. To do so, we do a set of resamples:
+
+```{r}
+set.seed(1234)
+office_boot <- bootstraps(office_train, strata = season)
+
+tune_spec <- linear_reg(penalty = tune(), mixture = 1) %>% 
+  set_engine("glmnet")
+
+lambda_grid <- grid_regular(penalty(), 
+                            levels = 50)
+
+doParallel::registerDoParallel()
+
+set.seed(2020)
+lasso_grid <- tune_grid(
+  wf %>% add_model(tune_spec), 
+  resamples = office_boot, 
+  grid = lambda_grid
+)
+```
+
+```{r}
+lasso_grid %>%
+  collect_metrics() %>%
+  ggplot(aes(penalty, mean, color = .metric)) +
+  geom_errorbar(aes(
+    ymin = mean - std_err,
+    ymax = mean + std_err
+  ),
+  alpha = 0.5
+  ) +
+  geom_line(size = 1.5) +
+  facet_wrap(~.metric, scales = "free", nrow = 2) +
+  scale_x_log10() +
+  theme(legend.position = "none")
+```
+
+```{r}
+lowest_rmse <- lasso_grid %>%
+  select_best("rmse")
+
+final_lasso <- finalize_workflow(
+  wf %>% add_model(tune_spec),
+  lowest_rmse
+)
+
+doParallel::stopImplicitCluster()
+
+# let's look at variable importance 
+library(vip)
+
+final_lasso %>%
+  fit(office_train) %>%
+  pull_workflow_fit() %>%
+  vi(lambda = lowest_rmse$penalty) %>%
+  mutate(
+    Importance = abs(Importance),
+    Variable = fct_reorder(Variable, Importance)
+  ) %>%
+  ggplot(aes(x = Importance, y = Variable, fill = Sign)) +
+  geom_col() +
+  scale_x_continuous(expand = c(0, 0)) +
+  labs(y = NULL)
+```
+
+```{r}
+last_fit(
+  final_lasso,
+  office_split
+) %>%
+  collect_metrics()
+```
 

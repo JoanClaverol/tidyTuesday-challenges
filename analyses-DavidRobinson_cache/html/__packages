@@ -18,3 +18,10 @@ lubridate
 survival
 broom
 gganimate
+schrute
+ggrepel
+Matrix
+glmnet
+foreach
+iterators
+doMC

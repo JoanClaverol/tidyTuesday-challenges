@@ -1,0 +1,584 @@
+---
+title: "TidyTuesday anlyses from David Robinson"
+output: 
+  html_document: 
+    toc: true
+    toc_float: true
+    code_folding: hide
+editor_options: 
+  chunk_output_type: inline
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE,
+                      cache = FALSE)
+```
+
+## European Energy by EuroStat
+
+Chart by Cédric Scherer: https://github.com/Z3tt/TidyTuesday/blob/master/R/2020_32_EuropeanEnergy.Rmd#L108
+
+```{r}
+library(tidytuesdayR)
+library(tidyverse)
+library(geofacet)
+library(gggibbous)
+library(ggtext)
+library(colorspace)
+library(ragg)
+library(patchwork)
+library(pdftools)
+
+# set themes visualizations
+theme_set(theme_void(base_family = "Avenir Next Condensed"))
+theme_update(
+  legend.position = "none",
+  plot.title = element_text(hjust = .5, face = "bold", color = "grey35", 
+                            size = 13, margin = margin(b = 10, t = 6)),
+  plot.caption = element_text(color = "grey65", size = 8, 
+                              margin = margin(15, 0, 5, 0)),
+  strip.text = element_blank(),
+  panel.spacing = unit(.075, "lines"),
+  plot.margin = margin(rep(7, 4)),
+  plot.background = element_rect(color = "grey94", fill = "grey94", size = 1.8)
+)
+```
+
+```{r}
+#tt <- tidytuesdayR::tt_load("2020-08-04")
+
+df_energy <- read_csv("https://raw.githubusercontent.com/rfordatascience/tidytuesday/master/data/2020/2020-08-04/energy_types.csv") %>% 
+  mutate(
+    country_name = if_else(country == "EL", "Greece", country_name),
+    country = if_else(country == "EL", "GR", country)
+  ) %>% 
+  filter(level == "Level 1")
+```
+
+```{r}
+my_grid <- 
+  europe_countries_grid1 %>% 
+  #filter(!code %in% c("IS", "BY", "RU", "MD", "CH")) %>% 
+  add_row(row = 6, col = 10, code = "GE", name = "Georgia") %>% 
+  mutate(row = if_else(code == "IE", 2, row)) 
+```
+
+```{r, fig.height=10, fig.width=14}
+moons <- df_energy %>% 
+  mutate(
+    type_agg = if_else(
+      type %in% c("Conventional thermal", "Nuclear"),
+      "Non-renewable", "Renewable"
+    )
+  ) %>% 
+  group_by(country, country_name, type_agg) %>% 
+  summarize(sum = sum(`2018`)) %>% 
+  mutate(
+    total = sum(sum),
+    prop = sum / unique(total)
+  ) %>% 
+  ungroup() %>% 
+  mutate(country = if_else(country == "UK", "GB", country)) %>% 
+  full_join(my_grid, by = c("country" = "code")) %>% 
+  mutate(country_name = if_else(country == "GB", "United Kingdom", country_name)) %>% 
+  mutate(max = max(total, na.rm = T)) %>% 
+  filter(type_agg == "Renewable") %>%
+  ggplot(aes(
+    x = .5, 
+    y = .5, 
+    size = total
+  )) +
+  geom_point(
+    aes(size = max),
+    color = lighten("#228b22", .65, space = "combined"),
+    shape = 21,
+    #fill = "transparent",
+    fill = "grey94",  ## change for white version
+    stroke = .9
+  ) +
+  geom_moon(
+    aes(ratio = prop), 
+    fill = "#228b22", 
+    color = "#228b22",
+    stroke = .3
+  ) +
+  geom_moon(
+    aes(ratio = 1 - prop), 
+    fill = "white", 
+    color = "#228b22",
+    stroke = .3,
+    right = FALSE
+  ) +
+  geom_text(
+    aes(label = country_name),
+    x = .5,
+    y = .98,
+    size = 3.5,
+    family = "Avenir Next Condensed",
+    color = "grey55",
+    vjust = 0
+  ) +
+  facet_geo(~ country, grid = my_grid) +
+  coord_cartesian(clip = "off") +
+  scale_x_continuous(limits = c(0, 1)) +
+  scale_y_continuous(limits = c(0, 1)) +
+  scale_size(range = c(.1, 30)) + 
+  theme(
+    plot.background = element_rect(fill = "white"),
+    plot.margin = margin(15, 25, 15, 25)
+  ) 
+moons
+```
+
+```{r, out.height="500px", out.width="800px"}
+df_energy_dots <-
+  df_energy %>% 
+  mutate(
+    type_agg = if_else(
+      type %in% c("Conventional thermal", "Nuclear"),
+      type, "Renewable"
+    )
+  ) %>% 
+  group_by(country, country_name, type_agg) %>% 
+  summarize(sum = sum(`2018`)) %>% 
+  mutate(
+    total = sum(sum),
+    prop = sum / unique(total)
+  ) %>% 
+  ungroup() %>% 
+  mutate(country = if_else(country == "UK", "GB", country)) %>% 
+  full_join(my_grid, by = c("country" = "code")) %>% 
+  mutate(country_name = if_else(country == "GB", "United Kingdom", country_name))
+dot_facet <- function(energy, color, size) { 
+  df_energy_dots %>% 
+  filter(type_agg == energy) %>% 
+  mutate(
+    max = max(sum, na.rm = T),
+    sum = if_else(sum == 0, NA_real_, sum)
+  ) %>% 
+  ggplot(aes(
+    x = .5, 
+    y = .5, 
+    size = sum
+  )) +
+  geom_point(
+    color = color,
+    shape = 16,
+    stroke = 0
+  ) +
+  geom_point(
+    aes(size = max),
+    color = lighten(color, .65, space = "combined"),
+    shape = 21,
+    fill = "transparent",
+    stroke = .7
+  ) +
+  facet_geo(~ country, grid = my_grid) +
+  coord_cartesian(clip = "off") +
+  scale_x_continuous(limits = c(0, 1)) +
+  scale_y_continuous(limits = c(0, 1)) +
+  scale_size_area(max_size = size) + 
+  theme(
+    plot.title = element_text(color = color),
+    plot.background = element_rect(fill = "white"),
+    plot.margin = margin(5, 10, 5, 10)
+  )
+}
+dots_r <- 
+  dot_facet(energy = "Renewable", color = "#228b22", size = 25 / 4) +
+  ggtitle("Renewable energy") +
+  theme(plot.margin = margin(5, 10, 15, 10))
+dots_r
+```
+
+
+```{r, out.height="500px", out.width="800px"}
+dots_n <- 
+  dot_facet(energy = "Nuclear", color = "#871a1a", size = 40 / 4) +
+  ggtitle("Nuclear energy") +
+  theme(plot.margin = margin(10, 10, 15, 10))
+dots_n
+```
+
+
+```{r, out.height="500px", out.width="800px"}
+dots_t <- 
+  dot_facet(energy = "Conventional thermal", color = "black", size = 34 / 4) +
+  ggtitle("Conventional thermal energy") +
+  theme(plot.margin = margin(10, 10, 0, 10))
+dots_t
+```
+
+```{r, fig.height=12, fig.width=4}
+df_leg <- df_energy_dots %>% 
+  group_by(type_agg) %>% 
+  arrange(-sum) %>% 
+  slice(1) %>% 
+  add_column(
+    x = rev(seq(.16, .82, length.out = 4)),
+    y = 1.04
+  )
+
+df_labs <-
+  tribble(
+    ~x, ~y, ~label, ~color,
+    .8, .265, "<span style='font-size:10pt'>**Germany as a reference**<br>(571.8 terawatt hours)</span><br><span style='font-size:8pt'>which is the largest energy<br>producing country in Europe</span>", "B",
+    .4, .45, "**Energy production**<br>per country", "A",
+    .68, .02, "**Renewable energy**<br><span style='font-size:9pt'>water, wind, radiation,<br>geothermal resources</span>", "A",
+    .24, .02, "**Non-renewable energy**<br><span style='font-size:9pt'>oil, natural gas, coal,<br>uranium, plutonium</span>", "C"
+  )
+
+df_lines <-
+  tribble(
+    ~x, ~y, ~xend, ~yend, ~color,
+    .275, .445, .314, .28, "A",  ## energy production
+    .61, .34, .455, .35, "B",  ## reference
+    .6, .08, .45, .21, "A",  ## reneweable
+    .35, .21, .2, .08, "C"  ## non-renewable
+  )
+
+
+legend <- df_energy_dots %>% 
+  mutate(max = max(total, na.rm = T)) %>% 
+  filter(
+    type_agg == "Renewable",
+    country == "IT"
+  ) %>%
+  ggplot(
+    aes(
+      x = .4, 
+      y = .25
+    )
+  ) +
+  ## legend moon facet #########################################################
+  geom_point(
+    size = 31,
+    color = lighten("#228b22", .65, space = "combined"),
+    shape = 21,
+    #fill = "white",
+    fill = "grey94", ## change for white version
+    stroke = 1.1
+  ) +
+  geom_moon(
+    aes(ratio = prop), 
+    size = 21, 
+    fill = "#228b22", 
+    color = "#228b22",
+    stroke = .3
+  ) +
+  geom_moon(
+    aes(ratio = 1 - prop), 
+    size = 21,
+    fill = "white", 
+    color = "#228b22",
+    stroke = .3,
+    right = FALSE
+  ) +
+  geom_richtext(
+    data = df_labs,
+    aes(
+      x = x, y = y, 
+      label = label, 
+      color = color
+    ),
+    family = "Avenir Next Condensed",
+    size = 4,
+    lineheight = .9,
+    fill = NA,
+    label.color = NA
+  ) +
+  geom_curve(
+    data = df_lines,
+    aes(
+      x = x, xend = xend,
+      y = y, yend = yend,
+      color = color
+    ),
+    curvature = .42
+  ) +
+  ## legend small multiples ####################################################
+  geom_point(
+    data = df_leg,
+    aes(
+      x = x, y = y, 
+      color = type_agg, 
+      size = sum
+    )
+  ) +
+  geom_richtext(
+    data = df_leg,
+    aes(x = x, y = y + .09, color = type_agg, label = glue::glue("<span style='font-size:10pt'>{type_agg}:</span><br>**{country_name}**")),
+    family = "Avenir Next Condensed",
+    size = 4.5,
+    fill = NA,
+    label.color = NA
+  ) +
+  geom_richtext(
+    data = df_leg,
+    aes(x = x, y = y - .09, color = type_agg, label = glue::glue("{round(sum / 1000, 1)} TWh<br><span style='font-size:8pt'>({round(prop, 2)*100}% of its production)</span>")),
+    family = "Avenir Next Condensed",
+    size = 4.5,
+    lineheight = .8,
+    fill = NA,
+    label.color = NA
+  ) +
+  ## title + texts #############################################################
+  geom_textbox(
+    data = tibble(
+      x = 0,
+      y = c(1.45, .7, -.34, -.6),
+      label = c(
+        "<b style='font-size:18pt'>How European countries generated electricity in 2018</b><br><br>**Germany** is the largest energy producing country in Europe.<br>It generates the most renewable and conventional thermal energy, representing 31% and 56% of its overall production respectively. **France** is the second largest energy European producer and by far the largest nuclear energy provider: 71% of its production is based on nuclear fission to generate heat.", 
+        "Renewable energy is energy that comes from resources that are naturally replenished such as sunlight, wind, water, and geothermal heat. Unlike fossil fuels, such as oil, natural gas and coal, or nuclear power sources such as uranium and plutonium, renewable energy regenerates naturally in a short period of time.",
+        "**Norway** had an electricity production almost entirely made up of renewable energy (97.7%). This makes Norway the second largest producer of this energy type in Europe. Interestingly, most of the renewable energy is produced by hydro and pumped hydro power that take up 95% and only 2.6% by wind. In contrast, twelve European countries produce less than 20% of their energy with renewable resources: **Malta** (0%), **Hungary** (5%), **Estonia** (6%), **Czechia** (7%), **Cyprus** (9%), **Ukraine** (9%), **Poland** (10%), **Netherlands** (13%), **Bulgaria** (17%), **Belgium** (18%), **Slovakia** (19%), and **France** (19%).",
+        "<span style='color:#656565'>Note: Energy production is mapped to the area of the circles.<br>*Visualization by Cédric Scherer • Data by Eurostat*</span>"),
+      v = c(.5, .5, .5, 1.3)
+    ),
+    aes(x = x, y = y, label = label, vjust = v),
+    width = unit(3.5, "inch"),
+    color = "black",
+    # family = "Playfair Display",
+    lineheight = 1.7,
+    size = 3,
+    fill = NA,
+    box.colour = NA,
+    hjust = 0
+  ) +
+  coord_cartesian(clip = "off") +
+  scale_x_continuous(limits = c(0, 1)) +
+  scale_y_continuous(limits = c(-.6, 1.5)) +
+  scale_color_manual(values = c("#228b22", "#45B145", "#929292", "black", "#871a1a", "#228b22"), guide = F) +
+  scale_size_area(max_size = 39 / 4, guide = F)
+legend
+```
+
+```{r fig.height=11, fig.width=19}
+path <- glue::glue(here::here())
+
+((legend | moons | (dots_r / dots_n / dots_t)) + 
+  plot_layout(widths = c(.35, 1, .35))) + 
+  ggsave(glue::glue("{path}","/plot.pdf"),
+         width = 19, height = 11, device = cairo_pdf)
+
+pdf_convert(pdf = glue::glue("{path}","/plot.pdf"), 
+            format = "png", dpi = 250, 
+            filenames = glue::glue("{path}","/plot.png"))
+```
+
+## Choped 
+
+### By gkaraminis [link](https://github.com/gkaramanis/tidytuesday/blob/master/2020-week35/chopped.R)
+
+```{r, fig.height=6, fig.width=9}
+library(tidyverse)
+library(tidytuesdayR)
+library(ggforce)
+
+chopped <- read_csv("https://raw.githubusercontent.com/rfordatascience/tidytuesday/master/data/2020/2020-08-25/chopped-raw.csv")
+
+# get the number of cuts by season
+cuts <- chopped %>% 
+  filter(str_detect(episode_notes, 'cut h')) %>% 
+  count(season) %>% 
+  mutate(n = as.numeric(n), 
+         n = case_when(season == 17 | season == 39 ~ n + 1, 
+                       TRUE ~ n)
+         )
+
+# cleaver blade 
+blade <- tibble(
+  x = c(0.5, 46.5, 46.5, 46, 45.5, 45, 43, 0.5),
+  y = c(0, 0, 17.5, 18.5, 19, 19.5, 20, 20),
+  color = "#E0E0E0"
+)
+
+# Cleaver handle
+handle <- tibble(
+  x = c(-30, 5, 5, -30),
+  y = c(20, 20, 14, 14),
+  color ="#55555B"
+  )
+
+# Colors and fonts
+bg <- "#F2B953"
+f1 = "black"
+f1b = "black"
+f2b = "black"
+
+# Plot
+ggplot(cuts) + 
+  # handle
+  geom_shape(data = handle,
+             aes(x = x, y = y - 0.5, fill = color),
+             radius = unit(0.5, 'cm')) +
+  annotate("point", x = c(-3, -7, -11), y = 16.5, size = 4.5, color = "#E0E0E0") + 
+  # Blade
+  geom_polygon(data = blade, aes(x = x, y = y - 0.5, fill = color)) +
+  annotate("point", x = 43.5, y = 16, size = 9, color = bg) +
+  # Title on blade
+  annotate("tile", x = 23.5, y = 0, height = 2, width = 46, fill = "#F2F3FB", color = NA) +
+  # Y axis - cuts per season
+  annotate("segment", x = -2, xend = 46, y = 5 * -1:-5, yend = 5 * -1:-5, color = "white", size = 0.2) +
+  annotate("text", x = -4, y = 5 * -1:-5, label = 1:5, color = "white", size = 5) +
+  annotate("text", x = -8, y = -5, label = "Number of cut injuries", hjust = 1, color = "white", size = 6) +
+  # X axis - seasons
+  annotate("text", x = seq(5, 45, by = 5), y = 2, label = seq(5, 45, by = 5), size = 4.5) +
+  annotate("tile", x = seq(5, 45, by = 5), y = 0, height = 2, width = 0.25, fill = "grey87", color = NA) +
+  annotate("text", x = -8, y = 2, label = "Season", hjust = 1, size = 6) +
+  # Blood!
+	geom_col(aes(x = season, y = -5 * n), fill = "#AA0000") +
+  # Title
+	annotate("text", x = 4, y = 16, label = "Cut injuries in Chopped", hjust = 0, size = 8, family = f2b, vjust = 0.6) +
+	annotate("text", x = 4.4, y = 13, label = "Cuts per season, as mentioned in episode notes", hjust = 0, size = 4, family = f1, vjust = 1, lineheight = 0.9) +
+  labs(caption = "Source: Kaggle | Graphic: Georgios Karamanis") +
+  # Scales and theme
+  scale_fill_identity() +
+	theme_void() +
+  theme(
+    plot.background = element_rect(fill = "orange", color = NA),
+    plot.margin = margin(20, 25, 20, 25),
+    plot.caption = element_text(margin = margin(40, 0, 0, 0), size = 6.5, vjust = 0)
+  ) +
+	ggsave(
+	  here::here(paste0("chopped-", format(Sys.time(), "%Y%m%d_%H%M%S"), ".png")),
+	  dpi = 320, width = 9, height = 6
+	  )
+```
+
+### By Ghislain Nono Gueye [link](https://gitlab.com/-/snippets/2009228)
+
+```{r}
+library(tidyverse)
+library(tidytuesdayR)
+
+library(gghighlight)
+library(tidystringdist)
+library(patchwork)
+library(ggrepel)
+
+# Set ggplot2 theme
+theme_set(theme_minimal())
+
+# Import data
+chopped_raw <- read_tsv("https://raw.githubusercontent.com/rfordatascience/tidytuesday/master/data/2020/2020-08-25/chopped.tsv")
+
+# Data wrangling ----
+
+# Make tidy data of judge names
+judges <- chopped_raw %>%
+  select(series_episode, matches("judge")) %>%
+  pivot_longer(cols = matches("judge"), names_to = "judge", values_to = "name")
+
+# String distance algorithm ----
+
+# Find names with the shortest string distance (i.e. probable fuzzy duplicates) using the "cosine" method
+str_dist <- judges %>%
+  drop_na() %>%
+  tidy_comb_all(name) %>%
+  tidy_stringdist(method = "cosine") %>%
+  arrange(cosine)
+
+# After examining the data, it seems that scores below 0.1 point to fuzzy duplicates
+fuzzy_dups <- str_dist %>%
+  filter(cosine < 0.1)
+
+# Make data frame of correct names (using Wikipedia) and fuzzy names (i.e. potentially misspelled names)
+# The first step could be automated with the use of webscraping, but there aren't too many names so I did it manually
+correct_chef_names <- c("Amanda Freitag", "Maneet Chauhan", "Missy Robbins", "Jody Williams", "Chris Santos", "Geoffrey Zakarian", "Aarón Sánchez")
+fuzzy_names <- unique(c(fuzzy_dups$V1, fuzzy_dups$V2))
+
+fuzzy <- map_dfr(correct_chef_names, function(name){
+  expand.grid(V1 = name, V2 = fuzzy_names) %>% 
+    tidy_stringdist(method = "cosine") %>%
+    mutate(across(.cols = where(is.factor), .fns = as.character)) %>%
+    filter(cosine < 0.061, V1 != V2) %>%
+    setNames(c("correct_name", "fuzzy_dup", "cosine"))
+})
+
+# Replace fuzzy names with the corresponding correct names 
+# Please message me if you know a more modern version of plyr::mapvalues() which is equally convenient!
+judges_clean <- judges
+judges_clean$name <- plyr::mapvalues(x = judges$name, from = fuzzy$fuzzy_dup, to = fuzzy$correct_name)
+
+# Barchart of top appearances before and after the treatment of fuzzy duplicates
+judges_count_pre <- judges %>%
+  drop_na() %>%
+  count(name, sort = TRUE) %>%
+  mutate(
+    name = fct_reorder(name, n),
+    fuzzy = name %in% fuzzy$correct_name,
+    rank = row_number(),
+    season = "pre"
+  )
+
+judges_count_post <- judges_clean %>%
+  drop_na() %>%
+  count(name, sort = TRUE) %>%
+  mutate(
+    name = fct_reorder(name, n),
+    fuzzy = name %in% fuzzy$correct_name,
+    rank = row_number(),
+    season = "post"
+  )
+
+top <- 15
+
+pre <- ggplot(data = judges_count_pre %>% top_n(n = top, wt = n), mapping = aes(x = name, y = n)) +
+  geom_col() +
+  gghighlight(fuzzy) +
+  coord_flip() +
+  labs(x = NULL, y = NULL, subtitle = "Before correction")
+
+post <- ggplot(data = judges_count_post %>% top_n(n = top, wt = n), mapping = aes(x = name, y = n)) +
+  geom_col() +
+  gghighlight(fuzzy) +
+  coord_flip() +
+  labs(x = NULL, y = NULL, subtitle = "After correction")
+
+pre + post + 
+  plot_annotation(
+    title = "The effects of name typos on top judge appareances on Chopped", subtitle = "Highlights show correct names that have fuzzy duplicates"
+  )
+
+
+# Slopegraph showing the impact of fuzzy duplicates on top judge appearances on Chopped
+judges_count <- bind_rows(judges_count_pre, judges_count_post) %>%
+  group_by(season) %>%
+  top_n(n = top, wt = n) %>%
+  ungroup() %>%
+  mutate(season = factor(season, levels = c("pre", "post")))
+
+p <- ggplot(judges_count, aes(x = season, y = rank, group = name, color = name)) +
+  geom_point(size = 2) +
+  geom_line(size = 1) +
+  labs(x = "", y = "", title = "The effects of name typos on top judge appareances on Chopped", subtitle = "Rankings are in parentheses") +
+  geom_text_repel(
+    data = judges_count %>% filter(season == "pre"),
+    aes(label = paste0(name, " (", rank, ")")),
+    hjust = "left",
+    nudge_x = -0.2
+  ) +
+  geom_text_repel(
+    data = judges_count %>% filter(season == "post"),
+    aes(label = paste0(name, " (", rank, ")")),
+    hjust = "right",
+    nudge_x = 0.2
+  ) +
+  theme(
+    legend.position = "none",
+    axis.text.y = element_blank(),
+    axis.text.x.top = element_text(size = 12),
+    panel.grid.major.y = element_blank(),
+    panel.grid.minor.y = element_blank(),
+    plot.title = element_text(hjust = 0.5),
+    plot.subtitle = element_text(hjust = 0.5)
+  ) +
+  scale_x_discrete(position = "top", labels = c("Before correction", "After correction")) +
+  scale_y_reverse()
+```
+
+
+```{r, fig.width=10, fig.height=8}
+p 
+```
+
