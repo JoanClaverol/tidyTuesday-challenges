@@ -5,6 +5,8 @@ output:
     toc: true
     toc_float: true
     code_folding: hide
+editor_options: 
+  chunk_output_type: console
 ---
 
 ```{r setup, include=FALSE}
@@ -804,5 +806,382 @@ wine_ratings %>%
   coord_flip()
 ```
 
+## NCAA Women's Basketball Tournament
 
+```{r}
+library(tidyverse)
+library(tidytuesdayR)
+library(scales)
+
+theme_set(theme_light())
+
+tt <- tt_load("2020-10-06") 
+
+finish_levels <- c("1st", "2nd", "RSF", "RF", "NSF", "N2nd", "Champ")
+
+tournament <- tt$tournament %>% 
+  filter(year >= 1994) %>% 
+  mutate(tourney_finish = fct_relevel(tourney_finish, finish_levels))
+```
+
+How many teams has been since the first date in the dataset: 
+
+```{r}
+tt$tournament %>% 
+  count(year) %>% 
+  ggplot(aes(year, n)) + 
+    geom_col()
+```
+
+There has veen 64 teams. 
+
+How many schoold had been?
+```{r}
+tt$tournament %>% 
+  count(school, sort = TRUE)
+```
+
+Placement is really interesting: 
+
+```{r}
+tt$tournament %>% 
+  count(conf_place, sort = TRUE)
+```
+
+There are problems on data quality. String do not make sense. Need to change that. 
+
+Let's also chekck some other data quality. 
+
+```{r}
+tournament %>% 
+  ggplot(aes(full_w, tourney_w + reg_w)) + 
+    geom_point(alpha = .1)
+```
+Understainding the data: 
+
+* Regular wins are before the tournament
+* Conf wins are subset of regular wins
+* Tournament wins are in this bracket of 64
+
+There have been 64 temas since 1964. 
+
+```{r}
+by_seed <- tournament %>% 
+  group_by(seed) %>% 
+  summarise(
+    n = n(), 
+    pct_win = mean(tourney_finish == "Champ"), 
+    pct_final_four = mean(tourney_finish %in% c("Champ", "N2nd","NSF")),
+    avg_round = mean(as.integer(tourney_finish))
+  )
+by_seed
+```
+
+
+```{r}
+by_seed %>% 
+  ggplot(aes(seed, avg_round)) + 
+  geom_line() + 
+  labs(x = "Starting seed", 
+       y = "On average, elminitaed in round...")
+```
+
+
+```{r}
+by_seed %>% 
+  ggplot(aes(seed, pct_final_four)) + 
+  geom_line() + 
+  scale_y_continuous(labels = percent) + 
+  labs(x = "Starting seed", 
+       y = "% of tims making the Final Four")
+```
+
+
+```{r}
+tournament %>% 
+  count(seed, tourney_finish) %>% 
+  group_by(seed) %>% 
+  mutate(pct = n / sum(n)) %>% 
+  ggplot(aes(tourney_finish, seed, fill = pct)) + 
+  geom_tile() +
+  geom_text(aes(label = percent(pct, accuracy = 1))) + 
+  scale_x_discrete(expand = c(0,0)) + 
+  scale_y_reverse(breaks = seq(1, 16), expand = c(0, 0)) + 
+  scale_fill_gradient2(high = "blue", labels = percent) + 
+  theme(panel.grid =element_blank(), 
+        axis.ticks = element_blank()) +
+  labs(x = "tournament finish (worst to best)", 
+       y = "starting seed", 
+       fill = "% of seed", 
+       title = "When a team starts in a seed, how do they end up?")
+```
+
+Has teh correlation of seededness to # of rounds changed over time?
+
+```{r}
+tournament %>% 
+  ggplot(aes(seed, as.integer(tourney_finish))) + 
+  geom_point(alpha = .1)
+# there is a negative correlation
+
+
+tournament %>% 
+  group_by(year) %>% 
+  summarise(correlation = cor(seed, as.integer(tourney_finish))) %>% 
+  ggplot(aes(year, correlation)) + 
+  geom_line()
+```
+
+No, the predecitiviness of a seed hasn't changed in 24 year. 
+
+Predicitng seed + outcome from regular season / conference
+
+```{r}
+tournament %>% 
+  ggplot(aes(seed, reg_percent)) +
+  geom_boxplot(aes(group = seed)) + 
+  geom_smooth(method = "loess")
+```
+
+Why the teams on seed 12 do better than 10
+
+Is it different by the region/
+
+```{r}
+tournament %>% 
+  mutate(conference = fct_lump(conference, 5)) %>% 
+  ggplot(aes(seed, reg_percent)) +
+  # geom_boxplot(aes(group = seed)) + 
+  geom_point(width = .05) + 
+  geom_smooth(method = "loess") + 
+  facet_wrap(~ conference)
+```
+
+There are some conference who never get placed over the 12 seed. 
+
+```{r}
+tournament %>% 
+  ggplot(aes(reg_percent, as.integer(tourney_w))) + 
+  geom_point() + 
+  geom_smooth(method = "lm") +
+  facet_wrap(~ seed)
+
+tournament %>% 
+  group_by(seed) %>% 
+  summarise(correlation = )
+```
+
+
+## Great american Beer Festival
+
+```{r}
+library(tidyverse)
+library(tidytuesdayR)
+library(glue)
+
+theme_set(theme_light())
+```
+
+```{r}
+tt <- tidytuesdayR::tt_load("2020-10-20")
+```
+
+```{r}
+beer_awards <- tt$beer_awards %>% 
+  mutate(state = str_to_upper(state), 
+         medal = fct_relevel(medal, c("Bronze", "Silver", "Gold")))
+
+beer_awards %>% 
+  count(year) %>% 
+  ggplot(aes(year, n)) + 
+  geom_col()
+```
+
+Increasing number of cities: 
+
+```{r}
+beer_awards %>% 
+  count(city, state, sort = T)
+```
+
+```{r}
+beer_awards %>% 
+  count(state, sort = T)
+```
+
+```{r}
+beer_awards %>% 
+  count(brewery, city, state, sort = T)
+```
+
+```{r}
+beer_awards %>% 
+  count(category, sort = T)
+```
+
+```{r}
+beer_awards %>% 
+  filter(category == "Bock")
+```
+
+Whihc are th emost awarded beers?
+
+```{r}
+beer_counts <- beer_awards %>% 
+  count(beer_name, brewery, medal, city, state)
+
+beer_counts %>% 
+  mutate(beer_name = glue("{ beer_name } ({ brewery })")) %>% 
+  filter(fct_lump(beer_name, 16, w = n) != "Other") %>% 
+  mutate(beer_name = fct_reorder(beer_name, n, sum)) %>% 
+  ggplot(aes(n, beer_name, fill = medal)) + 
+  geom_col() + 
+  labs(title = "Which beers have won th emost awards?", 
+       x = "# of awards", 
+       y = "")
+
+
+beer_counts %>% 
+  pivot_wider(names_from = medal, values_from = n, 
+              values_fill = list(n = 0)) %>% 
+  mutate(total = Bronze + Silver + Gold) %>% 
+  arrange(desc(total))
+```
+
+Let's look at the states
+
+ *Which states have won the most?
+
+```{r}
+beer_awards %>% 
+  count(state, sort=T)
+```
+
+Whihc is the state missing?
+
+```{r}
+setdiff(state.abb, beer_awards$state)
+```
+
+Miss represtnation with states: 
+
+* Choreplot ( colored map ) 
+* Per capita award winning beers
+* Put dots for cities + breweries 
+
+What breweries won the most awards
+
+```{r}
+by_brewery <- beer_awards %>% 
+  group_by(brewery) %>% 
+  summarise(n_medals = n(), 
+            n_beers = n_distinct(beer_name), 
+            weighted_ls = (sum(as.integer(medal)))) %>% 
+  arrange(desc(n_medals))
+
+beer_awards %>% 
+  count(brewery, medal) %>% 
+  filter(fct_lump(brewery, 16, w = n) != "Other") %>% 
+  mutate(brewery = fct_reorder(brewery, n, sum)) %>% 
+  ggplot(aes(n, brewery, fill = medal)) + 
+  geom_col() + 
+  labs(title = "Which brewery have won th emost awards?", 
+       x = "# of awards", 
+       y = "")
+```
+
+Look awards per capitaL 
+
+```{r}
+beer_awards %>% 
+  count(state, medal) %>% 
+  filter(fct_lump(state, 16, w = n) != "Other") %>% 
+  mutate(state = fct_reorder(state, n, sum)) %>% 
+  ggplot(aes(n, state, fill = medal)) + 
+  geom_col() + 
+  labs(title = "Which state have won th emost awards?", 
+       x = "# of awards", 
+       y = "")
+```
+
+Underepresented categories: 
+
+```{r}
+library(tidylo)
+library(tidytext)
+
+beer_awards %>% 
+  filter(fct_lump(state, 9) != "Other", 
+         fct_lump(category, 9) != "Other") %>% 
+  count(state, category) %>% 
+  complete(state, category, fill = list(n = 0)) %>% 
+  bind_log_odds(state, category, n) %>% 
+  mutate(state = fct_reorder(state, -n, sum)) %>% 
+  mutate(category = reorder_within(category, log_odds_weighted, state)) %>% 
+  ggplot(aes(log_odds_weighted, category, fill = log_odds_weighted > 0)) + 
+  geom_col() + 
+  scale_y_reordered() + 
+  facet_wrap(~state, scales = "free_y") + 
+  theme(legend.position = "none") + 
+  labs(x = "Weighted log-odds", 
+       y = "Category", 
+       title = "What types of beer are over - or under - represented in awards each state?", 
+       subtitle = "For the 9 states with the most awards")
+```
+
+States
+
+```{r}
+by_year_state <- beer_awards %>%
+  add_count(year, name = "year_total") %>%
+  mutate(state = fct_lump(state, 9)) %>%
+  count(year, state, year_total, sort = TRUE) %>%
+  mutate(pct_year = n / year_total)
+by_year_state %>%
+  filter(state != "Other") %>%
+  ggplot(aes(year, pct_year, color = state)) +
+  geom_line() +
+  expand_limits(y = 0) +
+  scale_y_continuous(labels = percent) +
+  facet_wrap(~ state)
+by_year_state %>%
+  filter(state == "WI") %>%
+  glm(cbind(n, year_total - n) ~ year,
+      data = .,
+      family = "binomial") %>%
+  summary()
+library(broom)
+by_year_state %>%
+  filter(state != "Other") %>%
+  mutate(state = state.name[match(state, state.abb)]) %>%
+  group_by(state) %>%
+  summarize(model = list(glm(cbind(n, year_total - n) ~ year, family = "binomial"))) %>%
+  mutate(tidied = map(model, tidy, conf.int = TRUE)) %>%
+  unnest(tidied) %>%
+  filter(term == "year") %>%
+  mutate(p.value = format.pval(p.value),
+         state = fct_reorder(state, estimate)) %>%
+  ggplot(aes(estimate, state)) +
+  geom_point() +
+  geom_vline(xintercept = 0, lty = 2) +
+  geom_errorbarh(aes(xmin = conf.low, xmax = conf.high), height = .1) +
+  labs(x = "Estimated slope",
+       title = "Which states become more or less frequent medal winners?",
+       y = "")
+```
+
+
+```{r}
+library(ggthemes)
+map_data("state")
+beer_awards %>%
+  mutate(state = str_to_lower(state.name[match(state, state.abb)])) %>%
+  count(state) %>%
+  right_join(map_data("state"), by = c(state = "region")) %>%
+  ggplot(aes(long, lat, fill = n, group = group)) +
+  geom_polygon() +
+  theme_map() +
+  coord_map() +
+  labs(fill = "# of award-winning beers")
+```
 

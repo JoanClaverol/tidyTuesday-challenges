@@ -251,3 +251,100 @@ last_fit(
   collect_metrics()
 ```
 
+## Datasaurus data
+
+```{r}
+library(tidyverse)
+library(datasauRus)
+
+theme_set(theme_light())
+
+
+datasaurus_dozen %>% 
+  ggplot(aes(x, y, color = dataset)) +
+  geom_point(alpha = 0.8, show.legend = F) + 
+  facet_wrap(~dataset, ncol = 5)
+```
+
+```{r}
+datasaurus_dozen %>% 
+  group_by(dataset) %>% 
+  summarise(across(c(x, y), list(mean = mean, sd = sd)), 
+            x_y_cor = cor(x, y))
+```
+
+You see there are no difference using this descriptive analystics. 
+Le'ts look at the count: 
+
+```{r}
+datasaurus_dozen %>% 
+  count(dataset)
+```
+
+Also the same number of observations. 
+
+A good model would be to use a random forest, or any tree model would help us to avoid overfitting. 
+
+## Bluid model
+
+```{r}
+library(tidymodels)
+
+dino_folds <- datasaurus_dozen %>%
+  # let's see if we can predict the dataset. First transform to factor: 
+  mutate(dataset = factor(dataset)) %>% 
+  bootstraps()
+dino_folds
+```
+
+```{r}
+rf_spec <- rand_forest(trees = 1000) %>% 
+  set_mode("classification") %>% 
+  set_engine("ranger")
+
+dino_wf <- workflow() %>% 
+  add_model(rf_spec) %>% 
+  add_formula(dataset ~ x + y)
+
+doParallel::registerDoParallel()
+dino_rs <- fit_resamples(
+  dino_wf, 
+  resamples = dino_folds, 
+  control = control_resamples(save_pred = T)
+) 
+dino_rs
+```
+
+## Evaluate model
+
+```{r}
+collect_metrics(dino_rs)
+```
+
+```{r}
+dino_rs %>% 
+  collect_predictions() %>%
+  group_by(id) %>% 
+  ppv(dataset, .pred_class)
+```
+
+```{r}
+dino_rs %>% 
+  collect_predictions() %>%
+  group_by(id) %>%
+  roc_curve(dataset, .pred_away:.pred_x_shape) %>% 
+  autoplot()
+```
+
+
+
+```{r}
+# look at the confusion matrix
+dino_rs %>% 
+  collect_predictions() %>% 
+  filter(.pred_class != dataset) %>% # filter the correct ones to highlight the wrong classifications
+  conf_mat(dataset, .pred_class) %>% 
+  autoplot(type = "heatmap")
+
+```
+
